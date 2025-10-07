@@ -39,6 +39,14 @@ Serial.println("\nConectado com sucesso ao broker");
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  String msg = "Matheus: Oi"; // informacao enviada para o broker
+  String topico = "AulaIoT/msg"
+  mqttpublish(topico.c_str(),msg.c_str());
+  delay(2000);
+
 
 }
+
+void callback(char* topic, byte* payload, unsigned long lenght) {
+
+  }
