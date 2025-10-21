@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include a"env.h"
 
 WiFiClient espclient;  //cria objeto p/ wifi
 PubSubClient mqtt(espclient);
@@ -14,6 +15,10 @@ const String topicoPub = "AulaDSM7"; // tópico para publicar as mensagens
 
 const String brokerUser = "";
 const String brokerPass = "";
+
+void connectToWiFi();
+void connectToBrker();
+
 
 #define LED_PIN 2  // LED embutido no pino 2
 
