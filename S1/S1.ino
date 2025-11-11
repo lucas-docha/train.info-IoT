@@ -1,15 +1,12 @@
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include "env.h"
-#include <WiFiClientSecure.h>
 
 // --- WiFi & MQTT Configuration ---
-const char* WIFI_SSID = ENV_SSID;
-const char* WIFI_PASS = ENV_PASS;
-
 const char* brokerURL = BROKER_URL;
 const int brokerPort = BROKER_PORT;
-const char* mqttTopic = TOPIC3;  // Tópico usado para publish/subscribe
+const char* mqttTopic = TOPICO_1;  // Tópico usado para publish/subscribe
 
 WiFiClientSecure client;
 PubSubClient mqtt(client);
@@ -40,43 +37,47 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void setup() {
   Serial.begin(115200);
-  client.setInsecure();
+  client.setInsecure();  // Conexão sem certificado (para testes)
   
-  // Configura o LED como saída
   pinMode(ledPin, OUTPUT);
 
   // Conexão Wi-Fi
-  WiFi.begin(ENV_SSID, ENV_PASS);
-  Serial.print("Conectando no WiFi");
+  Serial.print("Conectando ao WiFi ");
+  Serial.println(WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
-    delay(200);
+    delay(500);
   }
-  Serial.println("\nConectado com sucesso ao WiFi");
+  Serial.println("\n Wi-Fi conectado com sucesso!");
+  Serial.print("Endereço IP: ");
+  Serial.println(WiFi.localIP());
 
   // Conexão MQTT
   mqtt.setServer(brokerURL, brokerPort);
   mqtt.setCallback(callback);
 
   Serial.println("Conectando ao broker MQTT...");
-  String boardID = "S1-" + String(random(0xffff), HEX);
+  String boardID = "ESP32-" + String(random(0xffff), HEX);
 
-  while (!mqtt.connect(boardID.c_str(), BROKER_USR_NAME, BROKER_USR_PASS)) {
+  while (!mqtt.connect(boardID.c_str(), BROKER_USER, BROKER_PASS)) {
     Serial.print(".");
-    delay(200);
+    delay(1000);
   }
 
-  mqtt.subscribe(mqttTopic);  // Inscreve-se no tópico
-  Serial.println("\nConectado ao broker MQTT e inscrito no tópico");
+  Serial.println("\n Conectado ao broker MQTT!");
+  mqtt.subscribe(mqttTopic);
+  Serial.println("Inscrito no tópico: " + String(mqttTopic));
 }
 
 void loop() {
   mqtt.loop();  // Mantém a conexão MQTT ativa
 
-  // Lê comandos pela serial
+  // Lê comandos pela Serial
   if (Serial.available()) {
     String comando = Serial.readStringUntil('\n');
-    comando.trim();  // Remove espaços em branco
+    comando.trim();
 
     if (comando == "1") {
       digitalWrite(ledPin, HIGH);
