@@ -11,7 +11,7 @@ const char* mqttTopic = TOPICO_1;  // Tópico usado para publish/subscribe
 WiFiClientSecure client;
 PubSubClient mqtt(client);
 
-const int ledPin = 2;  // Pino do LED embutido
+const int ledPin = 19;  // Pino do LED embutido
 
 // --- Função para receber mensagens MQTT ---
 void callback(char* topic, byte* payload, unsigned int length) {
