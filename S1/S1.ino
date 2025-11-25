@@ -1,8 +1,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
-#include <Adafruit_Sensor.h>
-#include <DHT.h>
+#include <DHT11.h>
 #include "env.h"
 
 // wificlient seguro
@@ -24,8 +23,7 @@ const char* mqtt_topic_subscribe_rgb = "SA_GRUPO_HMLC/Controle/RGB";
 #define RGB_B_PIN 25
 
 // sensor DHT
-#define DHTTYPE DHT11
-DHT dht(DHTPIN, DHTTYPE);
+DHT11 dht11(4);
 
 // controle publicação
 long lastMsg = 0;
@@ -33,12 +31,12 @@ const int publishInterval = 5000;
 
 // leitura sensores
 float readTemperature() {
-  float t = dht.readTemperature();
+  float t = dht11.readTemperature();
   return t; 
 }
 
 float readHumidity() {
-  float h = dht.readHumidity();
+  float h = dht11.readHumidity();
   return h;
 }
 
@@ -102,10 +100,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
     message += (char)payload[i];
   }
 
-  // controle led normal
+
   if (strcmp(topic, mqtt_topic_subscribe_led) == 0) {
-    if (message == "1") digitalWrite(LED_PIN, HIGH);
-    if (message == "0") digitalWrite(LED_PIN, LOW);
+    if (message == "1") digitalWrite(19, HIGH);
+    if (message == "0") digitalWrite(19, LOW);
     publishLedState();
   }
 
@@ -134,7 +132,7 @@ void setup() {
   pinMode(ULTRASONIC_TRIG, OUTPUT);
   pinMode(ULTRASONIC_ECHO, INPUT);
 
-  dht.begin();
+  
   setup_wifi();
 
   // tls
