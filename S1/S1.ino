@@ -1,18 +1,20 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
-#include <DHT11.h>
+#include <DHT.h>
 #include "env.h"
 
-// wificlient seguro
 WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 
-// tópicos
-const char* mqtt_topic_subscribe_led = TOPICO_CONTROLE_GERAL;
-const char* mqtt_topic_subscribe_rgb = "SA_GRUPO_HMLC/Controle/RGB";
+const char* mqtt_server = BROKER_URL;
+const int mqtt_port = BROKER_PORT;
+const char* mqtt_user = BROKER_USER;
+const char* mqtt_pass = BROKER_PASS;
 
-// pinos
+const char* topic_subscribe_led = TOPICO_CONTROLE_S1_LED_ILUMINACAO;
+const char* topic_subscribe_rgb = TOPICO_CONTROLE_S1_LED_RGB;
+
 #define DHTPIN 4
 #define LDR_PIN 34
 #define ULTRASONIC_ECHO 23
@@ -22,21 +24,21 @@ const char* mqtt_topic_subscribe_rgb = "SA_GRUPO_HMLC/Controle/RGB";
 #define RGB_G_PIN 26
 #define RGB_B_PIN 25
 
-// sensor DHT
-DHT11 dht11(4);
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
 
-// controle publicação
 long lastMsg = 0;
 const int publishInterval = 5000;
 
-// leitura sensores
 float readTemperature() {
-  float t = dht11.readTemperature();
+  float t = dht.readTemperature();
+  if (isnan(t)) return -999.0;
   return t; 
 }
 
 float readHumidity() {
-  float h = dht11.readHumidity();
+  float h = dht.readHumidity();
+  if (isnan(h)) return -999.0;
   return h;
 }
 
@@ -56,27 +58,25 @@ float readDistance() {
   return duration * 0.034 / 2;
 }
 
-// led rgb
 void setRgbColor(int r, int g, int b) {
-  digitalWrite(RGB_R_PIN, r > 0 ? HIGH : LOW);
-  digitalWrite(RGB_G_PIN, g > 0 ? HIGH : LOW);
-  digitalWrite(RGB_B_PIN, b > 0 ? HIGH : LOW);
+  ledcWrite(0, r);
+  ledcWrite(1, g);
+  ledcWrite(2, b);
 }
 
-// publicação
 void publishLedState() {
   int ledState = digitalRead(LED_PIN);
-  const char* state = (ledState == HIGH) ? "ON" : "OFF";
-  mqttClient.publish(TOPICO_STATUS_LED, state);
+  const char* state = (ledState == HIGH) ? "1" : "0";
+  mqttClient.publish(topic_subscribe_led, state);
 }
 
 void publishSensorData(float value, const char* topic) {
+  if (value == -999.0) return;
   char msg[10];
   dtostrf(value, 4, 2, msg);
   mqttClient.publish(topic, msg);
 }
 
-// conexão wifi
 void setup_wifi() {
   Serial.print("Conectando ao WiFi ");
   Serial.println(WIFI_SSID);
@@ -93,30 +93,69 @@ void setup_wifi() {
   Serial.println(WiFi.localIP());
 }
 
-// callback MQTT
+void reconnect() {
+  while (!mqttClient.connected()) {
+    Serial.print("Tentando conexão MQTT...");
+    
+    String clientId = "ESP32_S1_";
+    clientId += String(random(0xffff), HEX);
+
+    if (mqttClient.connect(clientId.c_str(), mqtt_user, mqtt_pass)) {
+      Serial.println("\nConectado com sucesso ao broker MQTT!");
+      
+      mqttClient.subscribe(topic_subscribe_led);
+      Serial.print("Inscrito no tópico: ");
+      Serial.println(topic_subscribe_led);
+      
+      mqttClient.subscribe(topic_subscribe_rgb);
+      Serial.print("Inscrito no tópico: ");
+      Serial.println(topic_subscribe_rgb);
+      
+    } else {
+      Serial.print("falhou, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" Tentando novamente em 5 segundos");
+      delay(5000);
+    }
+  }
+}
+
 void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Mensagem recebida no tópico [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  
   String message = "";
   for (int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
+  Serial.println(message);
 
-
-  if (strcmp(topic, mqtt_topic_subscribe_led) == 0) {
-    if (message == "1") digitalWrite(19, HIGH);
-    if (message == "0") digitalWrite(19, LOW);
-    publishLedState();
+  if (strcmp(topic, topic_subscribe_led) == 0) {
+    if (message == "1") {
+      digitalWrite(LED_PIN, HIGH);
+      Serial.println("LED Iluminação LIGADO.");
+    } else if (message == "0") {
+      digitalWrite(LED_PIN, LOW);
+      Serial.println("LED Iluminação DESLIGADO.");
+    }
   }
 
-  // controle led rgb
-  else if (strcmp(topic, mqtt_topic_subscribe_rgb) == 0) {
+  else if (strcmp(topic, topic_subscribe_rgb) == 0) {
     int r = message.substring(0, message.indexOf(',')).toInt();
     int g = message.substring(message.indexOf(',') + 1, message.lastIndexOf(',')).toInt();
     int b = message.substring(message.lastIndexOf(',') + 1).toInt();
+    
     setRgbColor(r, g, b);
+    Serial.print("LED RGB ajustado para R:");
+    Serial.print(r);
+    Serial.print(" G:");
+    Serial.print(g);
+    Serial.print(" B:");
+    Serial.println(b);
   }
 }
 
-// setup
 void setup() {
   Serial.begin(115200);
   randomSeed(micros());
@@ -124,37 +163,31 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  pinMode(RGB_R_PIN, OUTPUT);
-  pinMode(RGB_G_PIN, OUTPUT);
-  pinMode(RGB_B_PIN, OUTPUT);
-  setRgbColor(0, 0, 0);
-
   pinMode(ULTRASONIC_TRIG, OUTPUT);
   pinMode(ULTRASONIC_ECHO, INPUT);
 
-  
+  ledcSetup(0, 5000, 8);
+  ledcAttachPin(RGB_R_PIN, 0);
+  ledcSetup(1, 5000, 8);
+  ledcAttachPin(RGB_G_PIN, 1);
+  ledcSetup(2, 5000, 8);
+  ledcAttachPin(RGB_B_PIN, 2);
+  setRgbColor(0, 0, 0);
+
+  dht.begin();
+
   setup_wifi();
 
-  // tls
   espClient.setInsecure();
-
-  // MQTT
-  mqttClient.setServer(BROKER_URL, BROKER_PORT);
+  mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
-
-  Serial.println("Conectando ao broker MQTT com TLS...");
-
-  if (mqttClient.connect("ESP32Client", BROKER_USER, BROKER_PASS)) {
-    Serial.println("Conectado ao MQTT!");
-    mqttClient.subscribe(mqtt_topic_subscribe_led);
-    mqttClient.subscribe(mqtt_topic_subscribe_rgb);
-  } else {
-    Serial.println("ERRO: não conectou ao MQTT.");
-  }
 }
 
-// loop
 void loop() {
+  if (!mqttClient.connected()) {
+    reconnect();
+  }
+  
   mqttClient.loop();
 
   unsigned long now = millis();
