@@ -3,97 +3,157 @@
 #include <PubSubClient.h>
 #include "env.h"
 
-//Pinos
+WiFiClientSecure espClient;
+PubSubClient mqttClient(espClient);
+
+const char* mqtt_server = BROKER_URL;
+const int mqtt_port = BROKER_PORT;
+const char* mqtt_user = BROKER_USER;
+const char* mqtt_pass = BROKER_PASS;
+
+const char* topic_comando_trem = TOPICO_CONTROLE_S4_TREM;
+const char* topic_velocidade = TOPICO_S4_TREM_VEL;
+
 #define IN1 25
 #define IN2 26
 #define PWM 27
 
-//Conexão MQTT
-WiFiClientSecure espClient;
-PubSubClient mqttClient(espClient);
+#define PWM_CHANNEL 0
+#define PWM_FREQ 5000
+#define PWM_RESOLUTION 8
 
+String currentDirection = "PARAR";
+int currentSpeed = 0;
 
-void tremFrente(int velocidade) {
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  ledcWrite(0, velocidade);  
-  mqttClient.publish(MQTT_TOPIC_STATUS, "Trem andando para frente");
-}
+void setup_wifi() {
+  delay(10);
+  Serial.print("Conectando ao WiFi ");
+  Serial.println(WIFI_SSID);
 
-void tremTras(int velocidade) {
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  ledcWrite(0, velocidade);
-  mqttClient.publish(MQTT_TOPIC_STATUS, "Trem andando para trás");
-}
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-void tremFrear() {
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, HIGH);
-  ledcWrite(0, 0);
-  mqttClient.publish(MQTT_TOPIC_STATUS, "Trem FREIO acionado");
-}
-
-//CallBack
-void callback(char* topic, byte* payload, unsigned int length) {
-  String comando = "";
-
-  for (int i = 0; i < length; i++) {
-    comando += (char)payload[i];
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
   }
 
-  comando.trim();
-
-  if (comando == "frente") {
-    tremFrente(200); 
-  }
-  else if (comando == "tras") {
-    tremTras(200);
-  }
-  else if (comando == "frear") {
-    tremFrear();
-  }
+  Serial.println("\nWi-Fi conectado com sucesso!");
+  Serial.print("Endereço IP: ");
+  Serial.println(WiFi.localIP());
 }
 
-//Reconexão MQTT
-void reconnectMQTT() {
+void reconnect() {
   while (!mqttClient.connected()) {
-    if (mqttClient.connect("Trem_S4", MQTT_USER, MQTT_PASSWORD)) {
-      mqttClient.subscribe(MQTT_TOPIC_CMD);
+    Serial.print("Tentando conexão MQTT...");
+    
+    String clientId = "ESP32_S4_";
+    clientId += String(random(0xffff), HEX);
+
+    if (mqttClient.connect(clientId.c_str(), mqtt_user, mqtt_pass)) {
+      Serial.println("\nConectado com sucesso ao broker MQTT!");
+      
+      mqttClient.subscribe(topic_comando_trem);
+      Serial.print("Inscrito no tópico: ");
+      Serial.println(topic_comando_trem);
+      
+      mqttClient.publish(topic_velocidade, "PARAR");
+      
     } else {
-      delay(2000);
+      Serial.print("falhou, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" Tentando novamente em 5 segundos");
+      delay(5000);
     }
   }
 }
 
+void setMotor(String direction, int speed) {
+  currentDirection = direction;
+  currentSpeed = speed;
+  
+  if (direction == "FRENTE") {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    ledcWrite(PWM_CHANNEL, speed);
+    Serial.print("Motor: FRENTE (Vel: ");
+    Serial.print(speed);
+    Serial.println(")");
+  } else if (direction == "TRAS") {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    ledcWrite(PWM_CHANNEL, speed);
+    Serial.print("Motor: TRAS (Vel: ");
+    Serial.print(speed);
+    Serial.println(")");
+  } else {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    ledcWrite(PWM_CHANNEL, 0);
+    Serial.println("Motor: PARAR");
+  }
+  
+  String status = currentDirection + " (Vel: " + String(currentSpeed) + ")";
+  mqttClient.publish(topic_velocidade, status.c_str());
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Mensagem recebida no tópico [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  
+  String message = "";
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.println(message);
+
+  if (strcmp(topic, topic_comando_trem) == 0) {
+    message.toUpperCase();
+    
+    int spaceIndex = message.indexOf(' ');
+    String command = (spaceIndex != -1) ? message.substring(0, spaceIndex) : message;
+    int speed = (spaceIndex != -1) ? message.substring(spaceIndex + 1).toInt() : 0;
+    
+    if (speed > 255) speed = 255;
+    if (speed < 0) speed = 0;
+
+    if (command == "FRENTE") {
+      setMotor("FRENTE", speed);
+    } else if (command == "TRAS") {
+      setMotor("TRAS", speed);
+    } else if (command == "PARAR" || command == "FREAR") {
+      setMotor("PARAR", 0);
+    } else {
+      Serial.println("Comando de trem inválido. Use FRENTE [VEL], TRAS [VEL] ou PARAR.");
+    }
+  }
+}
 
 void setup() {
   Serial.begin(115200);
+  randomSeed(micros()); 
 
-  // Configuração dos pinos
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
 
-  ledcSetup(0, 5000, 8);  
-  ledcAttachPin(PWM, 0);
+  ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);  
+  ledcAttachPin(PWM, PWM_CHANNEL);
 
-  
-  tremFrear();
+  setMotor("PARAR", 0);
 
-  // WiFi
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-  }
+  setup_wifi();
 
   espClient.setInsecure();
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
 }
 
 void loop() {
   if (!mqttClient.connected()) {
-    reconnectMQTT();
+    reconnect();
   }
+  
   mqttClient.loop();
+  
+  delay(10);
 }
