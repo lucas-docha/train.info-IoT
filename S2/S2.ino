@@ -4,100 +4,112 @@
 #include <Ultrasonic.h>
 #include "env.h"
 
-// Conexão com o MQTT
 WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 
-// Pinos dos sensores ultrassônicos
-#define ultrasonic_echo 1
-#define ultrasonic_trig 2
-#define ultrasonic_echo2 3
-#define ultrasonic_trig2 4
+const char* mqtt_server = BROKER_URL;
+const int mqtt_port = BROKER_PORT;
+const char* mqtt_user = BROKER_USER;
+const char* mqtt_pass = BROKER_PASS;
 
-// Pinos do LED
-#define led_pin 5
+const char* topic_presenca1 = TOPICO_S2_PRESENCA1;
+const char* topic_presenca2 = TOPICO_S2_PRESENCA2;
 
-// Objetos dos sensores
-Ultrasonic sensorEntrada(ultrasonic_trig, ultrasonic_echo);
-Ultrasonic sensorSaida(ultrasonic_trig2, ultrasonic_echo2);
+#define ULTRASONIC_ECHO1 1
+#define ULTRASONIC_TRIG1 2
+#define ULTRASONIC_ECHO2 3
+#define ULTRASONIC_TRIG2 4
 
-// Distância para detectar trem 
-int limiteDistancia = 100 ; // cm
+Ultrasonic sensorEntrada(ULTRASONIC_TRIG1, ULTRASONIC_ECHO1);
+Ultrasonic sensorSaida(ULTRASONIC_TRIG2, ULTRASONIC_ECHO2);
 
-// Verifica se o trem está no local
-bool tremNaArea = false;
+int limiteDistancia = 100 ;
 
-// Função callback do MQTT
-void callback(char* topic, byte* payload, unsigned int length) {
-}
+long lastPublish = 0;
+const long publishInterval = 500;
 
-void setup() {
-  Serial.begin(115200);
+void setup_wifi() {
+  delay(10);
+  Serial.print("Conectando ao WiFi ");
+  Serial.println(WIFI_SSID);
 
-  // Configurar pino do LED
-  pinMode(led_pin, OUTPUT);
-  digitalWrite(led_pin, LOW);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  // Iniciar WiFi
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Conectando ao WiFi...");
   while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
+    delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi conectado!");
 
-//Configuração tls e mqtt
-  espClient.setInsecure(); 
-  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-  mqttClient.setCallback(callback);
+  Serial.println("\nWi-Fi conectado com sucesso!");
+  Serial.print("Endereço IP: ");
+  Serial.println(WiFi.localIP());
+}
 
-  // Conectar ao MQTT
+void reconnect() {
   while (!mqttClient.connected()) {
-    Serial.println("Conectando ao MQTT...");
-    if (mqttClient.connect("esp32_trem", MQTT_USER, MQTT_PASSWORD)) {
-      Serial.println("Conectado ao MQTT!");
+    Serial.print("Tentando conexão MQTT...");
+    
+    String clientId = "ESP32_S2_";
+    clientId += String(random(0xffff), HEX);
+
+    if (mqttClient.connect(clientId.c_str(), mqtt_user, mqtt_pass)) {
+      Serial.println("\nConectado com sucesso ao broker MQTT!");
+      
     } else {
-      Serial.print("Falhou, rc=");
+      Serial.print("falhou, rc=");
       Serial.print(mqttClient.state());
-      delay(1000);
+      Serial.println(" Tentando novamente em 5 segundos");
+      delay(5000);
     }
   }
 }
 
+void callback(char* topic, byte* payload, unsigned int length) {
+}
+
+void publishData(const char* topic, const char* payload) {
+  if (mqttClient.publish(topic, payload)) {
+    Serial.print("Publicado [");
+    Serial.print(topic);
+    Serial.print("]: ");
+    Serial.println(payload);
+  } else {
+    Serial.println("ERRO: Falha ao publicar dado.");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  randomSeed(micros()); 
+
+  setup_wifi();
+
+  espClient.setInsecure();
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(callback);
+}
+
 void loop() {
+  if (!mqttClient.connected()) {
+    reconnect();
+  }
+  
   mqttClient.loop();
 
-  // Ler distância dos dois sensores
   int distEntrada = sensorEntrada.read();
   int distSaida = sensorSaida.read();
 
-  Serial.print("Entrada: ");
-  Serial.print(distEntrada);
-  Serial.print(" cm | Saída: ");
-  Serial.println(distSaida);
+  if (millis() - lastPublish > publishInterval) {
+    lastPublish = millis();
+    
+    char payload1[10];
+    itoa(distEntrada, payload1, 10);
+    publishData(topic_presenca1, payload1);
 
-  // DETECTOU O TREM ENTRANDO NA ÁREA
-  if (distEntrada < limiteDistancia && !tremNaArea) {
-    tremNaArea = true;
-
-    digitalWrite(led_pin, HIGH);   // acende LED
-    mqttClient.publish("ferrovia/trem", "Trem entrando na área");
-
-    Serial.println("Trem detectado na entrada!");
-    delay(500); // evitar múltiplas leituras
+    char payload2[10];
+    itoa(distSaida, payload2, 10);
+    publishData(topic_presenca2, payload2);
   }
 
-  // DETECTOU O TREM SAINDO DA ÁREA
-  if (distSaida < limiteDistancia && tremNaArea) {
-    tremNaArea = false;
-
-    digitalWrite(led_pin, LOW);   // apaga LED
-    mqttClient.publish("ferrovia/trem", "Trem saiu da área");
-
-    Serial.println("Trem detectado na saída!");
-    delay(500);
-  }
-
-  delay(200);
+  delay(10);
 }
